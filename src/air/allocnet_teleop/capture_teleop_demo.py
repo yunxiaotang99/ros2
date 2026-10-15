@@ -23,7 +23,6 @@
 """
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -46,11 +45,41 @@ def on_traj(msg):
         traj.append(len(msg.points))
 
 
-def main():
-    os.makedirs(FRAMES, exist_ok=True)
-    for f in os.listdir(FRAMES):
+def _dir_size_mb(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                total += os.path.getsize(fp)
+    return total / (1024.0 * 1024.0)
+
+
+def parse_args(argv=None):
+    """解析命令行参数。
+
+    修复说明：原代码引入了 argparse 但从未调用 add_argument，
+    导致 main() 里引用的 FRAMES 是未定义变量（NameError）。
+    文档中记载的 --frames / --max-mb 两个参数在此补齐实现。
+    """
+    ap = argparse.ArgumentParser(
+        description="扫航点构型并抓帧，用于采集演示素材。")
+    ap.add_argument("--frames", default=os.path.expanduser("~/shots"),
+                    help="抓帧输出目录（默认 ~/shots）")
+    ap.add_argument("--max-mb", type=int, default=2000,
+                    help="输出目录体积上限(MB)，超过则停止抓帧（默认 2000）")
+    return ap.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    frames = os.path.expanduser(args.frames)
+    max_mb = args.max_mb
+
+    os.makedirs(frames, exist_ok=True)
+    for f in os.listdir(frames):
         if f.endswith(".png"):
-            os.remove(os.path.join(FRAMES, f))
+            os.remove(os.path.join(frames, f))
 
     rospy.init_node("best_shot", anonymous=True)
     pub = rospy.Publisher(KEY, String, queue_size=100)
@@ -66,8 +95,12 @@ def main():
             time.sleep(d)
 
     def grab():
+        # 体积上限保护：避免长时间抓帧写满磁盘（原代码未实现 --max-mb）
+        if n[0] and n[0] % 50 == 0 and _dir_size_mb(frames) > max_mb:
+            print("⚠ 输出目录已达 %d MB 上限，停止抓帧" % max_mb)
+            raise SystemExit(3)
         subprocess.call(["import", "-display", DISP, "-window", "root",
-                         os.path.join(FRAMES, "s_%04d.png" % n[0])],
+                         os.path.join(frames, "s_%04d.png" % n[0])],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         n[0] += 1
 
